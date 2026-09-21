@@ -1,0 +1,11 @@
+#!/bin/sh
+# Launcher: runs the bundled pdfk package with PDFK_PYTHON (a venv with docling for build) or python.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PY="${PDFK_PYTHON:-python}"
+if [ -n "$PYTHONPATH" ]; then
+  PYTHONPATH="$DIR/cli:$PYTHONPATH"
+else
+  PYTHONPATH="$DIR/cli"
+fi
+export PYTHONPATH
+exec "$PY" -m pdfk "$@"

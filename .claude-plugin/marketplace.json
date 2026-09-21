@@ -1,0 +1,12 @@
+{
+  "name": "pdfk",
+  "owner": { "name": "Adam" },
+  "plugins": [
+    {
+      "name": "pdfk",
+      "source": "./",
+      "version": "0.1.0",
+      "description": "Docpacks from large vendor PDFs: precise, citeable, token-cheap answers about registers, memory maps and peripherals."
+    }
+  ]
+}
