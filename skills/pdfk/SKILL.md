@@ -6,8 +6,9 @@ allowed-tools: Bash(pdfk:*) Bash(*/bin/pdfk *) Read Grep Glob
 
 # pdfk — querying docpacks
 
-Docpacks live in `.pdfk/<doc-id>/` (see `pdfk status`). Each has `INDEX.md` (table of contents with pages),
-`sections/*.md` (markdown with `<!-- p.N -->` page anchors), `tables/*.csv`, `registers.jsonl`, `search.sqlite`.
+Docpacks live in `.pdfk/<doc-id>/` (see `pdfk status`). A project usually has several: a reference `manual`,
+a `datasheet`, `errata`, app notes. Each has `INDEX.md` (table of contents with pages), `sections/*.md`
+(markdown with `<!-- p.N -->` page anchors), `tables/*.csv`, `figures/`, `registers.jsonl`, `search.sqlite`.
 
 If `pdfk` is not on PATH, run `"${CLAUDE_PLUGIN_ROOT}/bin/pdfk"` instead (same arguments).
 
@@ -34,7 +35,13 @@ pdfk search "RCC_AHB2*" --kind table         # prefix, restrict to tables / head
 pdfk section rm0440 7.4.1 --lines 80         # print a section by number (paged with --offset)
 pdfk toc rm0440 7 --depth 3                  # headings below a chapter
 pdfk table rm0440 t0421                      # CSV of a table (merged cells preserved)
+pdfk search "clock tree" --kind figure       # figures are indexed by caption and by the labels inside them
+pdfk figure rm0440 f0102                     # caption, labels, PNG path (Read the PNG only if really needed)
 ```
+
+Without `--doc`, `search` and `reg` cover every docpack; hits carry the doc id. Electrical limits and pinout
+come from the `datasheet`, register behaviour from the `manual`. `pdfk reg` prints a `! errata mention …`
+block when an `errata` docpack names that register: read those hits before relying on the register.
 
 Then, if needed, `Read .pdfk/<doc>/sections/<file>.md` with `offset=<line>` `limit=80`.
 

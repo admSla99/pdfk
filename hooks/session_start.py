@@ -34,7 +34,9 @@ def main() -> int:
     lines = []
     for d in man.get("docs", {}).values():
         c = d.get("counts", {})
-        lines.append(f"{d['id']}: \"{d.get('title', '')}\" {d.get('pages', 0)}p, {c.get('registers', 0)} registers, {c.get('tables', 0)} tables")
+        figs = f", {c['figures']} figures" if c.get("figures") else ""
+        lines.append(f"{d['id']} [{d.get('kind', 'manual')}]: \"{d.get('title', '')}\" {d.get('pages', 0)}p, "
+                     f"{c.get('registers', 0)} registers, {c.get('tables', 0)} tables{figs}")
     if not lines:
         return 0
     ctx = ("pdfk docpacks available in .pdfk/ (" + "; ".join(lines) + "). For any question about these documents use the "

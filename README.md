@@ -47,15 +47,34 @@ for hardware questions, and `doc-researcher` handles multi-step lookups in its o
   INDEX.md          TOC: section files, headings (2 levels), pages
   sections/*.md     markdown with <!-- p.N --> anchors, front-matter, table ids
   tables/index.tsv  + tNNNN.csv (grid cells, merged cells repeated)
+  figures/index.tsv + fNNNN.png (PNG only with --figures; captions and in-drawing labels always indexed)
   registers.jsonl   name, offset, reset, fields[], page, section, verify
   sections.json     heading → file:line map (used by `pdfk section` / `toc`)
   search.sqlite     FTS5 index (regenerable: pdfk rebuild)
-  docling.json      lossless DoclingDocument (regenerable: pdfk build --force)
+  docling.json.gz   lossless DoclingDocument, gzip (~5 MB per 1000 pages); input of `pdfk rebuild`
   QA.md             confidence grades, low-confidence pages, verify mismatches
 ```
 
-Commit `INDEX.md`, `sections/`, `tables/`, `registers.jsonl`, `sections.json`, `QA.md`.
-Ignore `docling.json` and `search.sqlite` (or use LFS).
+Commit everything except `search.sqlite` (regenerable with `pdfk rebuild`). `docling.json.gz` is worth keeping:
+teammates can re-run post-processing after a plugin update without the hour-long conversion.
+
+## Several documents per project
+
+```bash
+pdfk build docs/rm0440.pdf  --id rm0440                   # kind defaults to manual
+pdfk build docs/ds12345.pdf --id ds12345 --kind datasheet --figures
+pdfk build docs/es0430.pdf  --id es0430  --kind errata
+```
+
+`search` and `reg` cover all docpacks unless `--doc` is given. When an `errata` docpack mentions a register,
+`pdfk reg NAME` appends the errata hits under the register.
+
+## Hooks
+
+- **SessionStart** lists the docpacks (id, kind, title, counts) in one line each.
+- **UserPromptSubmit** stays silent unless the prompt names a register or peripheral that exists in a docpack;
+  then it injects where it is documented (`GPIO0_CTRL (IO_BANK0 offset 0x004) is documented in [rp2040 §2.19.6.1 p.248]`).
+- **PreToolUse(Read)** blocks PDFs, `docling.json.gz`, and whole section files above 60 kB without `limit`.
 
 ## Register profiles
 
@@ -78,7 +97,8 @@ question with Sonnet.
 
 ## Notes
 
-- Conversion on CPU is slow (several seconds per page, first run also downloads ~500 MB of models).
-  Use a CUDA machine or a CI runner for 1000+ page manuals; commit the resulting docpack.
+- Conversion on CPU takes about 2 s per page (first run also downloads ~500 MB of models). The build prints a
+  progress line with ETA every 20 s (`--progress-every SEC`). Use a CUDA machine or a CI runner for 1000+ page
+  manuals; commit the resulting docpack.
 - `pip install docling` may backtrack forever on Windows; `python -m uv pip install --python .venv/Scripts/python.exe docling` resolves in seconds.
 - Page numbers in docpacks are real PDF page numbers, also when built with `--pages`.

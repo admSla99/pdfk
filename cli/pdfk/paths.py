@@ -10,6 +10,9 @@ from pathlib import Path
 
 PACK_DIRNAME = ".pdfk"
 MANIFEST = "manifest.json"
+DOC_JSON_GZ = "docling.json.gz"
+DOC_JSON = "docling.json"  # legacy, uncompressed
+DOC_KINDS = ("manual", "datasheet", "errata", "appnote", "other")
 
 
 def find_root(explicit: str | None = None) -> Path | None:
@@ -89,6 +92,7 @@ class DocEntry:
 
     id: str
     title: str = ""
+    kind: str = "manual"  # manual | datasheet | errata | appnote | other
     source: str = ""
     pdf_sha256: str = ""
     pages: int = 0
@@ -109,6 +113,14 @@ class DocEntry:
     def from_dict(cls, d: dict) -> "DocEntry":
         known = {k: d[k] for k in cls.__dataclass_fields__ if k in d}
         return cls(**known)
+
+
+def doc_json_path(pack: Path) -> Path | None:
+    """Path of the stored DoclingDocument (gzip preferred, legacy plain JSON accepted)."""
+    for name in (DOC_JSON_GZ, DOC_JSON):
+        if (pack / name).is_file():
+            return pack / name
+    return None
 
 
 def list_docs(root: Path) -> dict[str, DocEntry]:

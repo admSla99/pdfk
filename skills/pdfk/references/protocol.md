@@ -23,9 +23,24 @@
 | something in a table (pin mapping, memory map) | `pdfk search "…" --kind table`, then `pdfk table <doc> <tid>` |
 | within one chapter | `--section 7` (prefix match on heading numbers) |
 | all headings of a chapter | `pdfk toc <doc> 7 --depth 3` |
+| a block diagram, clock tree, timing diagram | `pdfk search "…" --kind figure`, then `pdfk figure <doc> <fid>` |
+| which document to trust | `pdfk status` shows each doc's kind: `manual`, `datasheet`, `errata`, `appnote` |
 
 Search terms are AND-ed; each term must appear in the same block. Use fewer, more specific terms.
 Underscored identifiers match as phrases (`RCC_CR` also matches "RCC CR"). Use `*` for prefixes.
+
+## Figures
+
+`pdfk figure <doc> <fid>` prints the caption, the text labels found inside the drawing and the PNG path.
+Caption and labels answer most questions ("which blocks feed clk_sys?"). Opening the PNG with `Read` costs
+image tokens: do it only when the structure of the drawing itself is the answer, and cite the figure:
+`[rp2040 §2.18.1 p.229 Figure 35]`.
+
+## Several documents
+
+- Same register name in two docpacks: `pdfk reg NAME` prints both, each with its doc id. Pick by `--doc` and say which.
+- Documents disagree (datasheet vs. manual, or an erratum overrides the manual): report both with citations and
+  state which one wins. An erratum wins over the manual it corrects.
 
 ## Citing
 

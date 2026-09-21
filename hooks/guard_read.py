@@ -34,7 +34,7 @@ def main() -> int:
         return deny("pdfk: do not read PDFs directly (token cost). Use `pdfk search \"<terms>\"`, `pdfk reg <NAME>` or "
                     "`pdfk section <doc> <sec>`; if no docpack exists, run /pdfk:pdfk-build <pdf> first.")
     if "/.pdfk/" in low:
-        if low.endswith("docling.json") or low.endswith("search.sqlite"):
+        if low.endswith(("docling.json", "docling.json.gz", "search.sqlite")):
             return deny("pdfk: this is an internal docpack file. Use pdfk search / section / table instead.")
         if low.endswith(".md") and "/sections/" in low and not inp.get("limit"):
             try:

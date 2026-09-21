@@ -13,6 +13,9 @@ from pdfk import search as searchmod
 from pdfk.paths import slugify, write_jsonl, save_json
 
 SEC_RE = re.compile(r"^\s*(?:(?:chapter|section|appendix)\s+)?([A-Z]?\d+(?:\.\d+)*)\.?\s+(\S.*)$", re.I)
+FIG_IN_TEXT_RE = re.compile(r"(?:Figure|Fig\.)\s+(\d+)\.\s+\S.*", re.S)
+FIG_REFERENCE_RE = re.compile(r"(in|see|to|and|by|from|of|on)\s*$", re.I)
+MIN_FIG_PT = (60.0, 40.0)  # width, height in PDF points; matches the PNG size filter at convert time
 MAX_FILE_BYTES = 150_000
 MIN_FILE_BYTES = 12_000
 
@@ -147,10 +150,26 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
             elif isinstance(item, TableItem):
                 blocks.append(add_table(item, page_of(item)))
             elif isinstance(item, PictureItem):
+                if item.prov:
+                    bb = item.prov[0].bbox
+                    if abs(bb.r - bb.l) < MIN_FIG_PT[0] or abs(bb.t - bb.b) < MIN_FIG_PT[1]:
+                        continue  # note / warning icons, logos
                 cap = item.caption_text(doc).strip()
                 fig_count[0] += 1
-                fid = f"f{fig_count[0]:04d}"
-                blocks.append(Block("picture", f"<!-- figure {fid}: {cap or 'no caption'} -->", page_of(item), title=cap))
+                try:  # same id as the PNG written at convert time: index in doc.pictures
+                    fid = f"f{int(item.self_ref.rsplit('/', 1)[-1]):04d}"
+                except ValueError:
+                    fid = f"f{fig_count[0]:04d}"
+                # text inside the drawing (block names, signal labels) makes figures searchable
+                labels: list[str] = []
+                for ch in item.children:
+                    sub = ch.resolve(doc)
+                    t = getattr(sub, "text", "")
+                    if t and ch.cref not in caption_refs:
+                        labels.append(" ".join(t.split()))
+                label_text = ", ".join(dict.fromkeys(labels))[:600]
+                page = page_of(item)
+                blocks.append(Block("picture", "", page, title=cap, table_id=fid, grid=[[label_text]]))
             elif isinstance(item, TextItem):
                 md = ser(item)
                 if not md:
@@ -161,7 +180,33 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
                 walk(item) if hasattr(item, "children") else None
 
     walk(doc.body)
+    _adopt_margin_captions(blocks)
     return blocks, tables
+
+
+def _adopt_margin_captions(blocks: list[Block]) -> None:
+    """Manuals that print 'Figure 35. …' in the page margin leave pictures without a caption, and the
+    layout model often glues that caption to the end of an unrelated paragraph or moves it to the
+    previous page. Give each caption-less picture the nearest unclaimed 'Figure N. …' text."""
+    claimed: set[str] = set()
+    for i, b in enumerate(blocks):
+        if b.kind != "picture" or b.title:
+            continue
+        best: tuple[int, int, str, str] | None = None  # (not-at-start, distance, figure number, caption)
+        for j in range(max(0, i - 15), min(len(blocks), i + 16)):
+            c = blocks[j]
+            if c.kind not in ("text", "list") or c.page not in (b.page - 1, b.page, b.page + 1):
+                continue
+            for m in FIG_IN_TEXT_RE.finditer(c.text):
+                before = c.text[max(0, m.start() - 14): m.start()]
+                if FIG_REFERENCE_RE.search(before):
+                    continue  # "… as shown in Figure 35. The PLL …" is a reference, not a caption
+                cand = (int(m.start() > 0), abs(j - i), m.group(1), " ".join(m.group(0).split())[:220])
+                if cand[2] not in claimed and (best is None or cand[:2] < best[:2]):
+                    best = cand
+        if best is not None:
+            claimed.add(best[2])
+            b.title = best[3]
 
 
 # --------------------------------------------------------------------------- splitting
@@ -256,8 +301,9 @@ def split_parts(blocks: list[Block]) -> list[Part]:
 # --------------------------------------------------------------------------- rendering
 
 
-def render_part(part: Part, doc_id: str, source: str) -> tuple[str, list[dict], list[dict]]:
+def render_part(part: Part, doc_id: str, source: str, figure_files: set[str] | None = None) -> tuple[str, list[dict], list[dict]]:
     """Return markdown text, heading records and search records (with 1-based line numbers)."""
+    figure_files = figure_files or set()
     lines: list[str] = []
     headings: list[dict] = []
     records: list[dict] = []
@@ -284,12 +330,28 @@ def render_part(part: Part, doc_id: str, source: str) -> tuple[str, list[dict], 
             lines.append(f"<!-- p.{b.page} -->")
         if b.kind == "table":
             lines.append(f"<!-- table {b.table_id} p.{b.page}{' (grid: merged cells, see tables/' + b.table_id + '.csv)' if b.spans else ''} -->")
+        if b.kind == "picture":
+            labels = (b.grid or [[""]])[0][0]
+            has_png = b.table_id in figure_files
+            b.text = (f"<!-- figure {b.table_id} p.{b.page}: {b.title or 'no caption'}"
+                      + (f" | file: figures/{b.table_id}.png" if has_png else "")
+                      + (f" | labels: {labels}" if labels else "") + " -->")
         line_no = len(lines) + 1
         lines.extend(b.text.splitlines())
         lines.append("")
-        text_for_index = b.text if b.kind != "table" else _table_index_text(b)
-        records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": b.kind, "text": text_for_index})
+        if b.kind == "table":
+            text_for_index = _table_index_text(b)
+        elif b.kind == "picture":
+            text_for_index = f"{b.title}\n{(b.grid or [['']])[0][0]}".strip() or "figure"
+        else:
+            text_for_index = b.text
+        kind = "figure" if b.kind == "picture" else b.kind
+        records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": kind, "text": text_for_index})
     return "\n".join(lines).rstrip() + "\n", headings, records
+
+
+def _one_line(s: str) -> str:
+    return " ".join((s or "").split())
 
 
 def _table_index_text(b: Block) -> str:
@@ -327,9 +389,17 @@ def render_index(doc_id: str, title: str, pages: int, parts: list[Part], heading
 
 def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic") -> dict:
     from docling_core.transforms.serializer.markdown import MarkdownDocSerializer, MarkdownParams
-    from docling_core.types.doc import DoclingDocument
 
-    doc = DoclingDocument.load_from_json(pack_dir / "docling.json")
+    from pdfk.convert import load_doc, save_doc_gz
+    from pdfk.paths import DOC_JSON_GZ, doc_json_path
+
+    src_json = doc_json_path(pack_dir)
+    if src_json is None:
+        raise SystemExit(f"{pack_dir}: no {DOC_JSON_GZ} (run `pdfk build <pdf>` to convert the document)")
+    doc = load_doc(src_json)
+    if src_json.suffix != ".gz":  # migrate legacy uncompressed packs (46 MB -> a few MB)
+        save_doc_gz(doc, pack_dir / DOC_JSON_GZ)
+        src_json.unlink()
     serializer = MarkdownDocSerializer(
         doc=doc,
         params=MarkdownParams(escape_underscores=False, escape_html=False, image_placeholder="<!-- image -->"),
@@ -345,8 +415,10 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
     sec_dir.mkdir(parents=True, exist_ok=True)
     all_headings: list[dict] = []
     all_records: list[dict] = []
+    fig_dir = pack_dir / "figures"
+    figure_files = {f.stem for f in fig_dir.glob("f*.png")} if fig_dir.is_dir() else set()
     for p in parts:
-        md, headings, records = render_part(p, doc_id, source)
+        md, headings, records = render_part(p, doc_id, source, figure_files)
         (sec_dir / (p.name + ".md")).write_text(md, encoding="utf-8")
         all_headings.extend(headings)
         all_records.extend(records)
@@ -373,6 +445,27 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
             with (tdir / f"{t['id']}.csv").open("w", encoding="utf-8", newline="") as cf:
                 csv.writer(cf).writerows(b.grid or [])
 
+    # figures index (captions + labels are always indexed; PNG files exist only after `build --figures`)
+    pictures = [b for b in blocks if b.kind == "picture"]
+    n_fig_files = 0
+    if pictures:
+        fig_dir.mkdir(exist_ok=True)
+        cur_sec = ""
+        sec_of_fig: dict[str, str] = {}
+        for b in blocks:
+            if b.kind == "heading" and (b.sec or not cur_sec):
+                cur_sec = b.sec or b.title[:40]
+            elif b.kind == "picture":
+                sec_of_fig[b.table_id] = cur_sec
+        with (fig_dir / "index.tsv").open("w", encoding="utf-8", newline="") as f:
+            f.write("id\tpage\tsection\tfile\tcaption\tlabels\n")
+            for b in pictures:
+                has = b.table_id in figure_files
+                n_fig_files += has
+                labels = (b.grid or [[""]])[0][0]
+                f.write(f"{b.table_id}\t{b.page}\t{sec_of_fig.get(b.table_id, '')}\t"
+                        f"{'figures/' + b.table_id + '.png' if has else ''}\t{_one_line(b.title)}\t{_one_line(labels[:300])}\n")
+
     # registers
     regs = regmod.extract_registers(blocks, doc_id=doc_id, profile=profile, records=all_records)
     write_jsonl(pack_dir / "registers.jsonl", regs)
@@ -380,7 +473,8 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
     # headings map + index
     title = doc.name or doc_id
     first_title = next((b.title for b in blocks if b.kind == "heading"), "")
-    if first_title and len(first_title) < 80 and (not title or title.endswith(".pdf") or title == doc_id):
+    stem = Path(source).stem if source else ""
+    if first_title and len(first_title) < 80 and (not title or title.endswith(".pdf") or title in (doc_id, stem)):
         title = first_title
     save_json(pack_dir / "sections.json", all_headings)
     (pack_dir / "INDEX.md").write_text(render_index(doc_id, title, len(doc.pages), parts, all_headings), encoding="utf-8")
@@ -395,6 +489,8 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
         "headings": len(all_headings),
         "tables": len(tables),
         "registers": len(regs),
+        "figures": len(pictures),
+        "figure_files": n_fig_files,
         "blocks": len(blocks),
         "levels": level_strategy,
     }
