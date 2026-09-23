@@ -37,6 +37,24 @@ def _pick_doc(root: Path, doc: str | None) -> list[str]:
     return list(docs)
 
 
+VERIFY_KEYS = ("ok", "mismatch", "unchecked", "field_resets_checked", "memmap_ok", "memmap_mismatch")
+
+
+def _run_verify(pack: Path, entry: DocEntry, pdf: Path) -> dict | None:
+    """Verify registers and memory-map entries of one pack against the PDF text layer, in place."""
+    from pdfk.verify import verify_registers
+
+    regs = read_jsonl(pack / "registers.jsonl")
+    mm = read_jsonl(pack / "memmap.jsonl")
+    if not regs and not mm:
+        return None
+    vsum = verify_registers(pdf, regs, page_offset=0, memmap=mm)
+    write_jsonl(pack / "registers.jsonl", regs)
+    write_jsonl(pack / "memmap.jsonl", mm)
+    entry.verify = {k: vsum[k] for k in VERIFY_KEYS}
+    return vsum
+
+
 def _write_qa(pack: Path, entry: DocEntry, verify_summary: dict | None) -> None:
     lines = [f"# QA — {entry.id}", "", f"Built {entry.built} with docling {entry.docling_version}; {entry.pages} pages in {entry.convert_seconds}s.",
              f"Confidence: mean={entry.grades.get('mean', '?')} low={entry.grades.get('low', '?')}.", ""]
@@ -45,9 +63,18 @@ def _write_qa(pack: Path, entry: DocEntry, verify_summary: dict | None) -> None:
     if verify_summary:
         lines += ["## Register verification (PDF text layer)",
                   f"ok={verify_summary['ok']} mismatch={verify_summary['mismatch']} unchecked={verify_summary['unchecked']}", ""]
+        lines.append(f"Checked: name, offset and reset of each register; name and reset value of each field "
+                     f"({verify_summary.get('field_resets_checked', 0)} non-trivial field resets) on the pages the register spans.")
+        lines.append("")
         for m in verify_summary["mismatches"][:200]:
             lines.append(f"- {m['name']} p.{m['page']}: missing {', '.join(m['missing'])}")
         lines.append("")
+        if verify_summary.get("memmap_ok") or verify_summary.get("memmap_mismatch"):
+            lines += ["## Memory map verification",
+                      f"ok={verify_summary['memmap_ok']} mismatch={verify_summary['memmap_mismatch']}", ""]
+            for m in verify_summary.get("memmap_mismatches", [])[:100]:
+                lines.append(f"- {m['name']} p.{m['page']}: missing {', '.join(m['missing'])}")
+            lines.append("")
     (pack / "QA.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -103,18 +130,11 @@ def cmd_build(a) -> int:
     entry.title = a.title or counts.pop("title")
     counts.pop("title", None)
     entry.counts = counts
-    vsum = None
-    if not a.no_verify:
-        regs = read_jsonl(pack / "registers.jsonl")
-        if regs:
-            from pdfk.verify import verify_registers
-            vsum = verify_registers(pdf, regs, page_offset=0)
-            write_jsonl(pack / "registers.jsonl", regs)
-            entry.verify = {k: vsum[k] for k in ("ok", "mismatch", "unchecked")}
+    vsum = None if a.no_verify else _run_verify(pack, entry, pdf)
     save_doc_entry(root, entry)
     _write_qa(pack, entry, vsum)
     print(_status_line(entry))
-    if a.strict and (entry.low_pages or (vsum and vsum["mismatch"])):
+    if a.strict and (entry.low_pages or (vsum and (vsum["mismatch"] or vsum["memmap_mismatch"]))):
         print("strict: low-confidence pages or register mismatches present, see QA.md", file=sys.stderr)
         return 2
     return 0
@@ -138,16 +158,8 @@ def cmd_rebuild(a) -> int:
         elif not entry.title:
             entry.title = auto_title
         entry.counts = counts
-        vsum = None
         src = Path(entry.source)
-        if not a.no_verify and src.is_file():
-            regs = read_jsonl(pack / "registers.jsonl")
-            if regs:
-                from pdfk.verify import verify_registers
-                pr = entry.page_range
-                vsum = verify_registers(src, regs, page_offset=0)
-                write_jsonl(pack / "registers.jsonl", regs)
-                entry.verify = {k: vsum[k] for k in ("ok", "mismatch", "unchecked")}
+        vsum = _run_verify(pack, entry, src) if not a.no_verify and src.is_file() else None
         save_doc_entry(root, entry)
         _write_qa(pack, entry, vsum)
         print(_status_line(entry))
@@ -158,10 +170,13 @@ def _status_line(e: DocEntry) -> str:
     c = e.counts or {}
     v = e.verify or {}
     vs = f" verify ok={v.get('ok', 0)} mismatch={v.get('mismatch', 0)}" if v else ""
+    if v.get("memmap_ok") or v.get("memmap_mismatch"):
+        vs += f", memmap ok={v.get('memmap_ok', 0)} mismatch={v.get('memmap_mismatch', 0)}"
     pr = f" (pages {e.page_range[0]}-{e.page_range[1]} of PDF)" if e.page_range else ""
     figs = f", {c.get('figures', 0)} figures ({c.get('figure_files', 0)} png)" if c.get("figures") else ""
     return (f"{e.id} [{e.kind}]: \"{e.title}\" {e.pages}p{pr}, {c.get('sections', 0)} section files, {c.get('headings', 0)} headings, "
-            f"{c.get('tables', 0)} tables{figs}, {c.get('registers', 0)} registers; confidence mean={e.grades.get('mean', '?')} "
+            f"{c.get('tables', 0)} tables{figs}, {c.get('registers', 0)} registers, {c.get('memmap', 0)} base addresses; "
+            f"confidence mean={e.grades.get('mean', '?')} "
             f"low={e.grades.get('low', '?')} low_pages={len(e.low_pages)};{vs}")
 
 
@@ -186,12 +201,16 @@ def cmd_search(a) -> int:
     root = require_root(a.root)
     hits = []
     for doc_id in _pick_doc(root, a.doc):
-        hits += query(root / doc_id / "search.sqlite", a.query, kind=a.kind, section=a.section, limit=a.n)
+        hits += query(root / doc_id / "search.sqlite", a.query, kind=a.kind, section=a.section, limit=a.n,
+                      full=a.full)
     hits.sort(key=lambda h: h["rank"])
     top = hits[: a.n]
     # several docpacks: bm25 scores are per index, so make sure each document's best hit is shown
     for doc_id in {h["doc"] for h in hits} - {h["doc"] for h in top}:
         top.append(next(h for h in hits if h["doc"] == doc_id))
+    for i, h in enumerate(top):  # full text only for the overall top hits
+        if i >= a.full:
+            h.pop("text", None)
     hits = top
     if a.json:
         print(json.dumps(hits, ensure_ascii=False))
@@ -221,7 +240,11 @@ def _print_reg(r: dict, full: bool) -> None:
     cite = f"[{r['doc']} §{r.get('section') or '?'} p.{r.get('page')} sections/{r.get('file')}:{r.get('line')}]"
     bits = f" offset {r['offset']}" if r.get("offset") else ""
     bits += f" reset {r['reset']}" if r.get("reset") else ""
-    bits += f" addr {r['address']}" if r.get("address") else ""
+    if r.get("address"):
+        bits += f" addr {r['address']}"
+    elif r.get("bases") and r.get("offset"):
+        off = int(r["offset"], 16)
+        bits += " addr " + ", ".join(f"{n} {int(b, 16) + off:#010x}" for n, b in r["bases"].items())
     ver = r.get("verify", r.get("confidence", ""))
     print(f"{r['name']}  {r.get('peripheral', '')}{bits}  {cite}  {ver}")
     if r.get("verify_missing"):
@@ -341,7 +364,46 @@ def cmd_table(a) -> int:
     if not p.is_file():
         print(f"table {a.tid} not found")
         return 1
+    cells_file = pack / "tables" / f"{a.tid}.json"
+    if a.cells:
+        if not cells_file.is_file():
+            print(f"{a.tid} has no merged cells; the CSV below is exact")
+        else:
+            t = load_json(cells_file, {})
+            print(f"{a.tid} p.{t.get('page')} {t.get('rows')}x{t.get('cols')} {t.get('caption', '')}".rstrip())
+            print("row col rowspan colspan text")
+            for c in t.get("cells", []):
+                hdr = " (header)" if c.get("hdr") else ""
+                print(f"{c['r']:>3} {c['c']:>3} {c['rs']:>7} {c['cs']:>7} {c['text']}{hdr}")
+            return 0
+    elif cells_file.is_file():
+        print(f"# merged cells: values are repeated across the span; exact spans: pdfk table {a.doc} {a.tid} --cells")
     print(p.read_text(encoding="utf-8"))
+    return 0
+
+
+def cmd_map(a) -> int:
+    root = require_root(a.root)
+    rows: list[dict] = []
+    for doc_id in _pick_doc(root, a.doc):
+        rows += read_jsonl(root / doc_id / "memmap.jsonl")
+    if a.name:
+        q = a.name.upper()
+        exact = [e for e in rows if e["name"].upper() == q]
+        rows = exact or [e for e in rows if q in e["name"].upper()]
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False))
+        return 0
+    if not rows:
+        print(f"no memory-map entry{' for ' + a.name if a.name else ''} (try `pdfk search \"base address\"`)")
+        return 1
+    for e in sorted(rows, key=lambda e: e["base"])[: a.n]:
+        end = f"-{e['end']}" if e.get("end") else ""
+        bus = f" {e['bus']}" if e.get("bus") else ""
+        ver = f"  {e['verify']}" if e.get("verify") else ""
+        print(f"{e['name']:<22} {e['base']}{end}{bus}  [{e['doc']} §{e.get('section') or '?'} p.{e['page']}]{ver}")
+    if len(rows) > a.n:
+        print(f"… {len(rows) - a.n} more (use -n)")
     return 0
 
 
@@ -378,8 +440,6 @@ def cmd_figure(a) -> int:
 
 
 def cmd_verify(a) -> int:
-    from pdfk.verify import verify_registers
-
     root = require_root(a.root)
     for doc_id in _pick_doc(root, a.doc):
         entry = list_docs(root)[doc_id]
@@ -387,14 +447,14 @@ def cmd_verify(a) -> int:
         if not src.is_file():
             raise SystemExit(f"source PDF not found: {src} (pass --pdf)")
         pack = root / doc_id
-        regs = read_jsonl(pack / "registers.jsonl")
-        pr = entry.page_range
-        vsum = verify_registers(src, regs, page_offset=0)
-        write_jsonl(pack / "registers.jsonl", regs)
-        entry.verify = {k: vsum[k] for k in ("ok", "mismatch", "unchecked")}
+        vsum = _run_verify(pack, entry, src)
+        if vsum is None:
+            print(f"{doc_id}: nothing to verify (no registers or memory map)")
+            continue
         save_doc_entry(root, entry)
         _write_qa(pack, entry, vsum)
-        print(f"{doc_id}: verify ok={vsum['ok']} mismatch={vsum['mismatch']} unchecked={vsum['unchecked']} (details in QA.md)")
+        print(f"{doc_id}: registers ok={vsum['ok']} mismatch={vsum['mismatch']}; "
+              f"memory map ok={vsum['memmap_ok']} mismatch={vsum['memmap_mismatch']} (details in QA.md)")
     return 0
 
 
@@ -447,7 +507,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--doc")
     s.add_argument("--kind", choices=["heading", "text", "list", "table", "code", "figure"], help="restrict block kind")
     s.add_argument("--section", help="restrict to section number prefix, e.g. 7.4")
-    s.add_argument("-n", type=int, default=10)
+    s.add_argument("-n", type=int, default=8)
+    s.add_argument("--full", type=int, default=3, metavar="N",
+                   help="print the whole block for the top N hits (default 3; 0 = snippets only)")
     s.add_argument("--json", action="store_true")
     common(s)
     s.set_defaults(fn=cmd_search)
@@ -478,9 +540,18 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("table", help="print a table as CSV (or `list`)")
     s.add_argument("doc")
     s.add_argument("tid")
+    s.add_argument("--cells", action="store_true", help="exact cell geometry (row/col spans) for tables with merged cells")
     s.add_argument("--lines", type=int, default=60)
     common(s)
     s.set_defaults(fn=cmd_table)
+
+    s = sub.add_parser("map", help="memory map: peripheral base addresses")
+    s.add_argument("name", nargs="?", help="peripheral or instance (e.g. UART0, PLL_SYS); omit to list all")
+    s.add_argument("--doc")
+    s.add_argument("-n", type=int, default=60)
+    s.add_argument("--json", action="store_true")
+    common(s)
+    s.set_defaults(fn=cmd_map)
 
     s = sub.add_parser("figure", help="figure caption, labels and PNG path (or `list`)")
     s.add_argument("doc")

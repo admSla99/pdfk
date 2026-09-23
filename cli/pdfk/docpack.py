@@ -8,14 +8,19 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pdfk import memmap as memmapmod
 from pdfk import registers as regmod
 from pdfk import search as searchmod
 from pdfk.paths import slugify, write_jsonl, save_json
 
 SEC_RE = re.compile(r"^\s*(?:(?:chapter|section|appendix)\s+)?([A-Z]?\d+(?:\.\d+)*)\.?\s+(\S.*)$", re.I)
+TOC_PLACEHOLDER = "<!-- printed table of contents omitted; see INDEX.md -->"
 FIG_IN_TEXT_RE = re.compile(r"(?:Figure|Fig\.)\s+(\d+)\.\s+\S.*", re.S)
-FIG_REFERENCE_RE = re.compile(r"(in|see|to|and|by|from|of|on)\s*$", re.I)
+FIG_REFERENCE_RE = re.compile(r"\b(in|see|to|and|by|from|of|on)\s*$", re.I)
 MIN_FIG_PT = (60.0, 40.0)  # width, height in PDF points; matches the PNG size filter at convert time
+TOC_TITLE_RE = re.compile(r"^(?:table\s+of\s+contents|contents|list\s+of\s+(?:tables|figures|examples))$", re.I)
+LEADER_RE = re.compile(r"(?:\.\s?){6,}")
+SPLIT_ID_RE = re.compile(r"(?<=[A-Za-z0-9]) _(?=[A-Za-z0-9])")  # docling artifact: "PLL _SYS" -> "PLL_SYS"
 MAX_FILE_BYTES = 150_000
 MIN_FILE_BYTES = 12_000
 
@@ -31,6 +36,7 @@ class Block:
     table_id: str = ""
     grid: list[list[str]] | None = None  # tables only
     spans: bool = False
+    cells: list[dict] | None = None  # tables with merged cells: exact cell geometry
 
 
 LABEL_TITLES = {"description", "warning", "note", "caution", "registers", "register", "offset", "offsets", "reset", "table"}
@@ -109,10 +115,18 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
         spans = False
         data = item.data
         for row in data.grid:
-            grid.append([(c.text or "").replace("\n", " ").strip() for c in row])
+            grid.append([fix_text((c.text or "").replace("\n", " ").strip()) for c in row])
             for c in row:
                 if c.row_span > 1 or c.col_span > 1:
                     spans = True
+        cells = None
+        if spans:
+            cells = [
+                {"r": c.start_row_offset_idx, "c": c.start_col_offset_idx, "rs": c.row_span, "cs": c.col_span,
+                 "text": fix_text(" ".join((c.text or "").split())),
+                 **({"hdr": True} if c.column_header or c.row_header else {})}
+                for c in sorted(data.table_cells, key=lambda c: (c.start_row_offset_idx, c.start_col_offset_idx))
+            ]
         caption = item.caption_text(doc).strip()
         md = ser(item)
         tables.append(
@@ -125,7 +139,7 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
                 "caption": caption,
             }
         )
-        return Block("table", md, page, table_id=tid, grid=grid, spans=spans, title=caption)
+        return Block("table", fix_text(md), page, table_id=tid, grid=grid, spans=spans, title=caption, cells=cells)
 
     def walk(node):
         for ref in node.children:
@@ -137,12 +151,13 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
                 continue
             if isinstance(item, (SectionHeaderItem, TitleItem)):
                 level = item.level if isinstance(item, SectionHeaderItem) else 1
-                sec, title = _parse_heading(item.text)
-                blocks.append(Block("heading", item.text.strip(), page_of(item), level=level, sec=sec, title=title))
+                htext = fix_text(item.text.strip())
+                sec, title = _parse_heading(htext)
+                blocks.append(Block("heading", htext, page_of(item), level=level, sec=sec, title=title))
                 walk(item)
             elif isinstance(item, GroupItem):
                 if item.label in (GroupLabel.LIST, GroupLabel.ORDERED_LIST, GroupLabel.INLINE):
-                    md = ser(item)
+                    md = fix_text(ser(item))
                     if md:
                         blocks.append(Block("list", md, page_of(item)))
                 else:
@@ -166,12 +181,12 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
                     sub = ch.resolve(doc)
                     t = getattr(sub, "text", "")
                     if t and ch.cref not in caption_refs:
-                        labels.append(" ".join(t.split()))
+                        labels.append(fix_text(" ".join(t.split())))
                 label_text = ", ".join(dict.fromkeys(labels))[:600]
                 page = page_of(item)
                 blocks.append(Block("picture", "", page, title=cap, table_id=fid, grid=[[label_text]]))
             elif isinstance(item, TextItem):
-                md = ser(item)
+                md = fix_text(ser(item))
                 if not md:
                     continue
                 kind = "code" if item.label == DocItemLabel.CODE else "text"
@@ -182,6 +197,54 @@ def extract_blocks(doc, serializer) -> tuple[list[Block], list[dict]]:
     walk(doc.body)
     _adopt_margin_captions(blocks)
     return blocks, tables
+
+
+def fix_text(text: str) -> str:
+    """Repair identifiers that the PDF text layer splits at underscores ("PLL _SYS", "PLL _CS_LOCK_BITS")."""
+    return SPLIT_ID_RE.sub("_", text) if " _" in text else text
+
+
+def _is_leader_block(b: Block) -> bool:
+    """Table-of-contents style content: most lines/cells carry dot leaders ("1.2 Summary . . . . 10")."""
+    if b.kind == "table":
+        cells = [c for row in (b.grid or []) for c in row if c.strip()]
+    elif b.kind in ("text", "list"):
+        cells = [line for line in b.text.splitlines() if line.strip()]
+    else:
+        return False
+    if not cells:
+        return False
+    return sum(1 for c in cells if LEADER_RE.search(c)) / len(cells) >= 0.4
+
+
+def drop_toc(blocks: list[Block], tables: list[dict]) -> int:
+    """Remove the printed table of contents / list of tables / list of figures. They duplicate INDEX.md,
+    and every entry matched searches for its own title ("Crystal Oscillator … 217"), pushing the real
+    section out of the top hits. Returns the number of blocks removed."""
+    out: list[Block] = []
+    in_toc = False
+    toc_level = 0
+    removed_tables: set[str] = set()
+    removed = 0
+    for b in blocks:
+        if b.kind == "heading":
+            # only unnumbered front-matter headings; "2.19.6 List of Registers" is real content
+            if not b.sec and TOC_TITLE_RE.match(b.title.strip()):
+                in_toc, toc_level = True, b.level
+                out.append(b)
+                out.append(Block("text", TOC_PLACEHOLDER, b.page))
+                continue
+            if in_toc and (b.sec or b.level <= toc_level):
+                in_toc = False
+        if in_toc or _is_leader_block(b):
+            removed += 1
+            if b.kind == "table":
+                removed_tables.add(b.table_id)
+            continue
+        out.append(b)
+    blocks[:] = out
+    tables[:] = [t for t in tables if t["id"] not in removed_tables]
+    return removed
 
 
 def _adopt_margin_captions(blocks: list[Block]) -> None:
@@ -329,7 +392,8 @@ def render_part(part: Part, doc_id: str, source: str, figure_files: set[str] | N
             cur_page = b.page
             lines.append(f"<!-- p.{b.page} -->")
         if b.kind == "table":
-            lines.append(f"<!-- table {b.table_id} p.{b.page}{' (grid: merged cells, see tables/' + b.table_id + '.csv)' if b.spans else ''} -->")
+            merged = f" (merged cells: pdfk table {doc_id} {b.table_id} --cells)" if b.spans else ""
+            lines.append(f"<!-- table {b.table_id} p.{b.page}{merged} -->")
         if b.kind == "picture":
             labels = (b.grid or [[""]])[0][0]
             has_png = b.table_id in figure_files
@@ -346,6 +410,8 @@ def render_part(part: Part, doc_id: str, source: str, figure_files: set[str] | N
         else:
             text_for_index = b.text
         kind = "figure" if b.kind == "picture" else b.kind
+        if b.text == TOC_PLACEHOLDER:
+            continue
         records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": kind, "text": text_for_index})
     return "\n".join(lines).rstrip() + "\n", headings, records
 
@@ -405,6 +471,7 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
         params=MarkdownParams(escape_underscores=False, escape_html=False, image_placeholder="<!-- image -->"),
     )
     blocks, tables = extract_blocks(doc, serializer)
+    toc_removed = drop_toc(blocks, tables)
     level_strategy = normalize_levels(blocks)
     parts = split_parts(blocks)
 
@@ -426,7 +493,7 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
     # tables
     tdir = pack_dir / "tables"
     tdir.mkdir(exist_ok=True)
-    for old in tdir.glob("t*.csv"):
+    for old in list(tdir.glob("t*.csv")) + list(tdir.glob("t*.json")):
         old.unlink()
     tb_by_id = {b.table_id: b for b in blocks if b.kind == "table"}
     sec_of_table: dict[str, str] = {}
@@ -444,6 +511,9 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
             b = tb_by_id[t["id"]]
             with (tdir / f"{t['id']}.csv").open("w", encoding="utf-8", newline="") as cf:
                 csv.writer(cf).writerows(b.grid or [])
+            if b.cells:  # the CSV repeats merged values; the exact geometry lives next to it
+                save_json(tdir / f"{t['id']}.json", {"id": t["id"], "page": t["page"], "caption": t["caption"],
+                                                     "rows": t["rows"], "cols": t["cols"], "cells": b.cells})
 
     # figures index (captions + labels are always indexed; PNG files exist only after `build --figures`)
     pictures = [b for b in blocks if b.kind == "picture"]
@@ -466,9 +536,14 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
                 f.write(f"{b.table_id}\t{b.page}\t{sec_of_fig.get(b.table_id, '')}\t"
                         f"{'figures/' + b.table_id + '.png' if has else ''}\t{_one_line(b.title)}\t{_one_line(labels[:300])}\n")
 
-    # registers
+    # registers + memory map
     regs = regmod.extract_registers(blocks, doc_id=doc_id, profile=profile, records=all_records)
+    mm = memmapmod.extract_memmap(blocks)
+    for e in mm:
+        e["doc"] = doc_id
+    linked = memmapmod.link_registers(regs, mm)
     write_jsonl(pack_dir / "registers.jsonl", regs)
+    write_jsonl(pack_dir / "memmap.jsonl", mm)
 
     # headings map + index
     title = doc.name or doc_id
@@ -489,6 +564,9 @@ def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic
         "headings": len(all_headings),
         "tables": len(tables),
         "registers": len(regs),
+        "memmap": len(mm),
+        "registers_linked": linked,
+        "toc_blocks_dropped": toc_removed,
         "figures": len(pictures),
         "figure_files": n_fig_files,
         "blocks": len(blocks),

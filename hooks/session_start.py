@@ -40,7 +40,9 @@ def main() -> int:
     if not lines:
         return 0
     ctx = ("pdfk docpacks available in .pdfk/ (" + "; ".join(lines) + "). For any question about these documents use the "
-           "pdfk skill (pdfk reg / search / section) and cite [doc §sec p.N]. Never Read the PDFs.")
+           "pdfk skill (pdfk reg / map / search / section) and cite [doc §sec p.N]. `pdfk search` shows the full "
+           "text of its top hits and `pdfk reg` values marked ok are verified against the PDF: answer from them "
+           "without re-reading. Never Read the PDFs.")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}))
     return 0
 

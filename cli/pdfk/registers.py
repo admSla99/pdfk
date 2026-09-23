@@ -28,6 +28,10 @@ BITS_CELL_RE = re.compile(r"^\[?\s*(\d+)(?:\s*[:\-–]\s*(\d+))?\s*\]?$")
 FIELD_LEAD_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*(?:\[\d+(?::\d+)?\])?)\s*[:\-–]\s*(.*)$", re.S)
 NUMBERED_RE = re.compile(r"^(.*?)(\d+)([A-Z0-9_]*)$")
 BITS_HEADERS = ("bits", "bit", "bit no.", "bit number", "bit(s)", "bit field")
+# TableFormer sometimes shifts the tail of a long description into the next row's cell:
+# "(SMx_CLKDIV) have been changed on-the-fly. SM_RESTART : Write 1 to …". The field name then
+# follows a sentence end instead of starting the cell.
+MID_FIELD_RE = re.compile(r"(?:^|[.)]\s+)([A-Z][A-Z0-9_]*[A-Z0-9](?:\[\d+(?::\d+)?\])?)\s?:\s")
 
 
 def _norm_hex(s: str) -> str:
@@ -124,6 +128,12 @@ def _fields_from_table(grid: list[list[str]]) -> list[dict]:
                 name, desc = fm.group(1), fm.group(2).strip()
             elif re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", desc.strip().rstrip(".")):
                 name, desc = desc.strip().rstrip("."), ""
+            else:
+                mm = MID_FIELD_RE.search(desc)
+                if mm and mm.start(1) > 0 and out:
+                    spill = desc[: mm.start(1)].strip()
+                    out[-1]["desc"] = (out[-1]["desc"] + " " + re.sub(r"\s+", " ", spill))[:400].strip()
+                    name, desc = mm.group(1), desc[mm.end():].strip()
         if not name and desc.lower().startswith("reserved"):
             name = "Reserved"
         f = {"bits": bits, "name": name, "desc": re.sub(r"\s+", " ", desc)[:400]}
@@ -216,12 +226,19 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
     pending_label = ""  # "Offsets" split from ": 0x000, …" into two text blocks by the layout model
     periph_ctx = ""  # last peripheral seen in "PERIPH: NAME Register" form; reset at numbered headings
     last_family: dict | None = None  # previous register family (its `fields` list is shared by its records)
+    last_regs: list[dict] = []  # records emitted for last_family (page_end is a scalar, so update each)
+
+    def touch(page: int) -> None:
+        """Remember the last page that contributed data; verify reads the text layer up to it."""
+        if cur is not None and page:
+            cur["page_end"] = max(cur.get("page_end", 0), page)
 
     def close():
-        nonlocal cur, last_family
+        nonlocal cur, last_family, last_regs
         if not cur:
             return
         last_family = cur
+        last_regs = []
         if cur.get("offsets") or cur.get("fields"):
             names, derived, offsets = cur.pop("names"), cur.pop("derived"), cur.pop("offsets")
             family = f"{names[0]}…{names[-1]}" if len(names) > 1 else ""
@@ -241,6 +258,7 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
                     r["derived"] = True
                 r["confidence"] = "good" if r.get("offset") and r.get("fields") else "partial"
                 regs.append(r)
+                last_regs.append(r)
         cur = None
 
     def start(pe: str, names: list[str], derived: list[bool], b, rec: dict, title: str, level: int):
@@ -256,7 +274,8 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
         close()
         cur = {"doc": doc_id, "peripheral": pe, "names": names, "derived": derived, "offsets": [],
                "section": sec_path, "page": b.page,
-               "file": rec.get("file", ""), "line": rec.get("line", 0), "title": title[:120], "fields": []}
+               "file": rec.get("file", ""), "line": rec.get("line", 0), "title": title[:120], "fields": [],
+               "page_end": b.page}
         cur_level = level
 
     for i, b in enumerate(blocks):
@@ -274,6 +293,16 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
             if nm:
                 start(*nm, b, rec, b.title, b.level)
                 continue
+            if cur is not None and not b.sec:
+                # the layout model sometimes promotes "Offset : 0x00" to a heading
+                om = OFFSET_RE.search(b.text)
+                if om and not cur["offsets"]:
+                    cur["offsets"] = _expand_offsets(_split_list(om.group(1)), len(cur["names"]))
+                    touch(b.page)
+                    continue
+                if b.text.strip().rstrip(":").strip().lower() in LABEL_WORDS:
+                    pending_label = b.text.strip().rstrip(":")
+                    continue
             # only numbered headings end a register; labels like "Description" / "WARNING" do not
             if cur and b.sec and b.level <= cur_level:
                 close()
@@ -303,6 +332,7 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
             om = OFFSET_RE.search(txt)
             if om and not cur["offsets"]:
                 cur["offsets"] = _expand_offsets(_split_list(om.group(1)), len(cur["names"]))
+                touch(b.page)
             rm = RESET_RE.search(txt)
             if rm and not cur.get("reset"):
                 v = rm.group(1).strip()
@@ -313,6 +343,7 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
             fields = _fields_from_text(txt)
             if fields:
                 cur["fields"].extend(fields)
+                touch(b.page)
             continue
 
         if b.kind == "table" and cur is not None:
@@ -322,7 +353,10 @@ def extract_registers(blocks, *, doc_id: str, profile: str = "generic", records:
                     # a page break inside the previous register's bit table: the next register's
                     # margin caption was read before the continuation rows
                     last_family["fields"].extend(fields)
+                    for r in last_regs:
+                        r["page_end"] = max(r.get("page_end", r["page"]), b.page)
                     continue
+                touch(b.page)
                 seen = {f["bits"] for f in cur["fields"]}
                 cur["fields"].extend(f for f in fields if f["bits"] not in seen)  # page-spanning tables
                 cur.setdefault("table", b.table_id)
