@@ -1,0 +1,42 @@
+id	category	question	must
+r01	register	What is the register offset of GPIO0_CTRL in IO_BANK0 of the RP2040, and which bits hold the FUNCSEL field?	0x004 ; 4:0
+r02	register	In the RP2040 GPIO0_STATUS register, which bit is IRQTOPROC and what is its access type?	26 ; RO|read-only|read only
+r03	register	What is the absolute address of the UARTIBRD register of UART1 on the RP2040?	0x40038024
+r04	register	Which bits of the RP2040 UARTFBRD register hold the fractional baud rate divisor, and what is the field called?	5:0 ; BAUD_DIVFRAC
+r05	register	What is the offset of the RP2040 PLL FBDIV_INT register and which bits does the FBDIV_INT field occupy?	0x8 ; 11:0
+r06	register	Which bits of the RP2040 PLL PRIM register hold POSTDIV1 and POSTDIV2, and what are their reset values?	18:16 ; 14:12 ; 0x7|7
+r07	register	What is the reset value of the DELAY field in the RP2040 XOSC STARTUP register, and which bit is X4?	0xc4|196 ; 20
+r08	register	Which field of the RP2040 DMA channel control register (CHx_CTRL_TRIG) selects the transfer size, which bits does it occupy, and what sizes can it select?	DATA_SIZE ; 3:2 ; byte ; halfword|half-word|half word ; word
+r09	register	Which bits of the RP2040 ADC CS register select the ADC input (AINSEL), and which bit enables the temperature sensor?	14:12 ; TS_EN ; 1
+r10	register	In the RP2040 WATCHDOG CTRL register, which bit enables the watchdog and which bit triggers an immediate reset?	30 ; 31 ; TRIGGER
+r11	register	What is the reset value of the VSEL field in the RP2040 VREG register and which core voltage does it correspond to?	0xb|1011|11 ; 1.10|1.1
+r12	register	Which bits of the RP2040 I2C IC_CON register form the SPEED field, what is its reset value, and which mode does that value select?	2:1 ; 0x2 ; fast
+r13	register	In the RP2040 RESETS RESET register, which bit holds UART0 in reset, and what is its reset value?	22 ; 0x1|1
+r14	register	What is the offset of the RP2040 TIMER TIMERAWL register and what is its access type?	0x28 ; RO|read-only|read only
+r15	register	Which bits of the RP2040 SPI SSPCR0 register hold the data size select (DSS) and the serial clock rate (SCR)?	3:0 ; 15:8
+m01	memmap	What is the base address of the RP2040 DMA registers?	0x50000000
+m02	memmap	What is the base address of the RP2040 PLL_USB registers?	0x4002c000
+m03	memmap	What is the base address of the RP2040 IO_BANK0 (User Bank IO) registers?	0x40014000
+m04	memmap	At which base address do the RP2040 XIP control registers (XIP_CTRL) start?	0x14000000
+m05	memmap	What is the base address of the RP2040 PIO1 block?	0x50300000
+m06	memmap	What is the base address of the RP2040 SIO registers?	0xd0000000
+m07	memmap	What is the base address of the RP2040 I2C1 registers?	0x40048000
+p01	procedure	On the RP2040, in what frequency range must the PLL VCO run?	750 ; 1600
+p02	procedure	What is the minimum reference frequency (FREF / REFDIV) allowed for the RP2040 PLL?	5 ; MHz
+p03	procedure	At what nominal frequency does the RP2040 ring oscillator (ROSC) run during boot, and in what range is it guaranteed to be?	6.5|6 mhz|6mhz ; 1.8 ; 12
+p04	procedure	How is bus keeper mode enabled on an RP2040 pad?	PDE ; PUE
+p05	procedure	How is the UART baud rate divisor computed on the RP2040?	16 ; UARTCLK
+p06	procedure	Which ADC input is the RP2040 temperature sensor connected to, and what formula converts the ADC voltage to degrees Celsius?	4 ; 0.706 ; 0.001721|1.721
+p07	procedure	In what units is the RP2040 XOSC STARTUP_DELAY specified?	256
+p08	procedure	With a 12 MHz crystal, in what range must the RP2040 PLL FBDIV value stay to keep the VCO legal?	63 ; 133
+p09	procedure	What is the width and tick rate of the RP2040 timer counter, and how many alarms does it have?	64 ; microsecond|µs|1 MHz|1MHz|per us ; 4|four
+t01	table	Which UART signal is available on RP2040 GPIO0 and under which function number?	UART0 TX|UART0_TX ; F2|function 2
+t02	table	How much on-chip SRAM does the RP2040 have and in how many banks?	264 ; 6|six
+t03	table	How many independent DMA channels does the RP2040 have?	12|twelve
+t04	table	How many PIO blocks does the RP2040 have and how many state machines does each contain?	two|2 ; four|4
+t05	table	Which VREG VSEL value selects a 1.30 V core voltage on the RP2040?	1111|0xf|15
+e01	errata	Can the RP2040 XOSC COUNT register be relied on for a software delay? Name the relevant erratum.	E7 ; unreliable|not reliable|should not
+e02	errata	Is there an erratum affecting the RP2040 watchdog counter, and what does it mean for the value to program?	E1 ; twice ; double|2x|×2|multiply
+n01	negative	What is the reset value of the RCC_CR register according to the available documentation?	NOT_FOUND
+n02	negative	What is the reset value of the ETH_MACCR Ethernet MAC configuration register in the available documentation?	NOT_FOUND
+n03	negative	Which bits of the LPUART1_BRR register set the baud rate in the available documentation?	NOT_FOUND

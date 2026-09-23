@@ -10,3 +10,5 @@ venv/
 
 # docpacks are built per project, never inside the plugin repo
 .pdfk/
+eval/results/*/pdfk*/
+eval/results/*/baseline/
