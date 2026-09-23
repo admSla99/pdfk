@@ -1,6 +1,6 @@
 [project]
 name = "pdfk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Docpacks: precise, citeable, token-cheap knowledge packs built from large vendor PDFs (docling based)."
 requires-python = ">=3.10"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
 # Query-only installs (team members who just read committed docpacks) need nothing:
 # `pip install --no-deps pdfk` gives working search / reg / section / toc / table / status.
 build = ["docling>=2.100", "pypdfium2>=4"]
+test = ["pytest>=8"]
 
 [project.scripts]
 pdfk = "pdfk.cli:main"
@@ -22,3 +23,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["pdfk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
