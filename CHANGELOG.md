@@ -25,6 +25,9 @@ Accuracy, memory map, tests and a reproducible eval.
 - **Search output.** The top 3 hits are printed in full (for a heading: the heading and what follows it), so
   most answers need no follow-up read. The skill tells the agent to answer as soon as a hit holds the fact,
   to run independent lookups in one turn, and to call `pdfk` as a plain command.
+- **README.** Requirements, install from the git URL (pdfk is not on PyPI), a quick start for a new MCU
+  project, the command list and current limits. `build`/`rebuild` without docling now explain how to install
+  it instead of failing with a traceback.
 - **Eval.** `eval/` runs 41 graded questions through `claude -p` against pdfk and against the plain
   "docling markdown + grep" baseline, isolated from user-level plugins. RP2040, Sonnet: both 41/41 correct;
   pdfk cites a page for 39/39 answerable questions (baseline 0/39) at $0.035 vs $0.047 per question.

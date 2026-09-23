@@ -454,7 +454,14 @@ def render_index(doc_id: str, title: str, pages: int, parts: list[Part], heading
 
 
 def build_pack(pack_dir: Path, doc_id: str, source: str, profile: str = "generic") -> dict:
-    from docling_core.transforms.serializer.markdown import MarkdownDocSerializer, MarkdownParams
+    try:
+        from docling_core.transforms.serializer.markdown import MarkdownDocSerializer, MarkdownParams
+    except ImportError as e:
+        raise SystemExit(
+            "pdfk build/rebuild need docling, which this Python does not have (query commands work without it). "
+            "Install the full CLI: uv tool install \"git+https://github.com/admSla99/pdfk.git#subdirectory=cli\", "
+            "or point PDFK_PYTHON at an interpreter that has docling."
+        ) from e
 
     from pdfk.convert import load_doc, save_doc_gz
     from pdfk.paths import DOC_JSON_GZ, doc_json_path

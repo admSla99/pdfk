@@ -1,46 +1,93 @@
 # pdfk — docpacks for Claude Code
 
 Turns large vendor PDFs (MCU reference manuals, datasheets, errata) into **docpacks**: markdown split by
-chapter with page anchors, a table of contents, CSV tables, a register database and a full-text index.
-Claude Code then answers from the docpack with citations `[doc §sec p.N]` at a few thousand tokens per
-question instead of reading the PDF.
+chapter with page anchors, a table of contents, CSV tables, a register database, a memory map and a full-text
+index. Claude Code then answers from the docpack with citations `[doc §sec p.N]` instead of reading the PDF.
+
+## Requirements
+
+- Python 3.10 or newer, available as `python` on PATH (the plugin hooks run `python`).
+- [uv](https://docs.astral.sh/uv/) for installing the CLI: `pip install uv`, then use `uv` or `python -m uv`.
+- For building docpacks: about 2 GB of disk for docling, torch and the layout/table models, downloaded on
+  first use. Conversion runs on CPU at about 2 s per page, so a 2 000-page manual takes about an hour.
+  A CUDA machine is faster. Only the person who builds a docpack needs this.
+- For asking questions: nothing beyond Python. The query commands use the standard library only.
 
 ## Install
 
-The CLI depends on `docling`, which pulls torch and the layout/table models (~2 GB) on first use.
+The repository is both the plugin and its marketplace; the CLI lives in `cli/`.
 
 ```bash
-# CLI (full install: build + query)
-uv tool install git+<repo-url>#subdirectory=cli
-# or from a checkout:
-uv tool install ./cli
+# 1. CLI with build support (pulls docling)
+uv tool install "git+https://github.com/admSla99/pdfk.git#subdirectory=cli"
 
-# Plugin, from this repo as a marketplace
-/plugin marketplace add <repo-url>
+# 1b. or query-only, for teammates who use docpacks someone else built (no docling, a few kB)
+pip install --no-deps "git+https://github.com/admSla99/pdfk.git#subdirectory=cli"
+```
+
+```text
+# 2. Plugin, inside Claude Code
+/plugin marketplace add https://github.com/admSla99/pdfk.git
 /plugin install pdfk@pdfk
 ```
 
-Team members who only **query** docpacks that are already committed in a project repo need none of the
-machine learning stack: `pip install --no-deps pdfk` gives working `search`, `reg`, `section`, `toc`,
-`table` and `status` (they are stdlib-only). Only `build`, `rebuild` and `verify` import docling.
+Check the CLI with `pdfk --version`. Update later with `uv tool upgrade pdfk` and `/plugin marketplace update pdfk`.
 
-During plugin development use `claude --plugin-dir ./pdfk` and `/reload-plugins`. If `pdfk` is not on
-PATH, the bundled launcher `bin/pdfk` runs the vendored package with `$PDFK_PYTHON` (default `python`).
+`pdfk` is not published on PyPI: always install from the git URL, never `pip install pdfk`.
 
-## Use
+On Windows `uv` resolves docling in seconds, while `pip install docling` can backtrack for a long time.
+
+## Quick start: a new MCU project
+
+1. Put the PDFs somewhere in the project, for example `docs/`. They do not have to be committed.
+2. Build one docpack per document from the project root. It writes to `.pdfk/<id>/` and prints progress with an ETA:
+
+   ```bash
+   pdfk build docs/rm0440.pdf  --id rm0440                          # reference manual
+   pdfk build docs/ds12288.pdf --id ds12288 --kind datasheet --figures
+   pdfk build docs/es0430.pdf  --id es0430  --kind errata
+   ```
+
+   For a first check on a big manual, build one chapter with `--pages 273-352` before the whole document.
+3. Check the result:
+   - `pdfk status` prints one line per docpack.
+   - `pdfk toc rm0440 --depth 1` should match the manual's chapters.
+   - `.pdfk/rm0440/QA.md` lists low-confidence pages and registers whose numbers did not match the PDF text.
+   - Spot-check a register you know with `pdfk reg <NAME>`.
+4. Commit `.pdfk/` and add `.pdfk/*/search.sqlite` to `.gitignore`. Teammates then need only the query-only
+   install. After a plugin update, `pdfk rebuild` regenerates everything from `docling.json.gz` in seconds.
+5. Open Claude Code in the project and ask, for example "Which bits of RCC_CR enable the PLL, and what is its
+   reset value?". The plugin announces the docpacks at session start. The `pdfk` skill loads automatically,
+   and answers cite `[rm0440 §7.4.1 p.281]`. `/pdfk:pdfk-build <pdf>` runs step 2 from inside Claude Code.
+
+## Commands
 
 ```bash
-pdfk build docs/rm0440.pdf --id rm0440 --profile generic      # once per document (minutes to an hour on CPU)
 pdfk status
 pdfk reg RCC_CR                         # fields, offset, reset, absolute address, citation
 pdfk map RCC                            # base address from the memory map
 pdfk search "PLL ready" --doc rm0440    # ranked, cited hits; the top 3 in full (--full N)
-pdfk section rm0440 7.4.1
-pdfk table rm0440 t0421 --cells         # exact merged-cell geometry
+pdfk section rm0440 7.4.1               # a section by number, with page anchors
+pdfk toc rm0440 7 --depth 3             # headings below a chapter
+pdfk table rm0440 t0421 --cells         # a table as CSV; --cells gives exact merged-cell spans
+pdfk figure rm0440 list                 # figures: caption, labels, PNG path
+pdfk rebuild [id]                       # re-run post-processing from docling.json.gz
+pdfk verify [id]                        # re-check numbers against the PDF text layer
 ```
 
-In Claude Code: `/pdfk:pdfk-build <pdf>`, `/pdfk:pdfk-status`; the `pdfk` skill is picked up automatically
-for hardware questions, and `doc-researcher` handles multi-step lookups in its own context.
+Every command takes `--root <dir>` if you are not inside the project. `pdfk <command> --help` lists all options.
+
+In Claude Code the `pdfk` skill loads automatically for hardware questions. `doc-researcher` handles
+multi-step lookups in its own context. The user commands are `/pdfk:pdfk-build <pdf>` and `/pdfk:pdfk-status`.
+
+## Current limits
+
+- **Register layouts.** The parser is verified on the RP2040 datasheet (937 registers, all checked against the
+  PDF). The ST reference-manual layout is covered by unit tests only. Build a real STM32 manual and read its
+  `QA.md` before relying on `pdfk reg` for it. `pdfk search` and `pdfk section` work on any layout.
+- **Scanned PDFs.** Born-digital PDFs only by default. Scanned PDFs need `--ocr`, which is slower and untested here.
+- **Formulas.** Equations drawn as images are not converted, for example the XOSC startup-delay formula in the RP2040 datasheet.
+- **Tested setup.** Tested on Windows 11 with Python 3.12 and docling 2.127.
 
 ## Layout of a docpack
 
@@ -63,14 +110,9 @@ teammates can re-run post-processing after a plugin update without the hour-long
 
 ## Several documents per project
 
-```bash
-pdfk build docs/rm0440.pdf  --id rm0440                   # kind defaults to manual
-pdfk build docs/ds12345.pdf --id ds12345 --kind datasheet --figures
-pdfk build docs/es0430.pdf  --id es0430  --kind errata
-```
-
-`search` and `reg` cover all docpacks unless `--doc` is given. When an `errata` docpack mentions a register,
-`pdfk reg NAME` appends the errata hits under the register.
+A project usually has a reference manual, a datasheet and an errata sheet (see the quick start). `search` and
+`reg` cover all docpacks unless `--doc` is given. When an `errata` docpack mentions a register, `pdfk reg NAME`
+appends the errata hits under the register.
 
 ## Hooks
 
@@ -147,5 +189,4 @@ What this says:
 - Conversion on CPU takes about 2 s per page (first run also downloads ~500 MB of models). The build prints a
   progress line with ETA every 20 s (`--progress-every SEC`). Use a CUDA machine or a CI runner for 1000+ page
   manuals; commit the resulting docpack.
-- `pip install docling` may backtrack forever on Windows; `python -m uv pip install --python .venv/Scripts/python.exe docling` resolves in seconds.
 - Page numbers in docpacks are real PDF page numbers, also when built with `--pages`.

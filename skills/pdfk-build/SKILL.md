@@ -16,8 +16,8 @@ Arguments given: `$ARGUMENTS`
 Steps:
 
 1. Run `pdfk build $ARGUMENTS` (if `pdfk` is missing, use `"${CLAUDE_PLUGIN_ROOT}/bin/pdfk" build $ARGUMENTS`;
-   if docling is not importable, tell the user to install it in a venv, `pip install "docling"`, and set
-   `PDFK_PYTHON` to that interpreter, then retry). Conversion of a 1000-page manual takes tens of minutes on CPU;
+   if docling is not importable, tell the user to install the full CLI with
+   `uv tool install "git+https://github.com/admSla99/pdfk.git#subdirectory=cli"`, then retry). Conversion of a 1000-page manual takes tens of minutes on CPU;
    run it in the background. The build prints a progress line every 20 s
    (`rm0440: 120/2100 pages (5%) 1.7 s/page, ETA 56 min`): relay the ETA once, then wait for completion.
    Ask which `--kind` the document is if it is not obvious from its title (errata sheets matter: `pdfk reg`
