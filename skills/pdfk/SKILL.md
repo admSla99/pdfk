@@ -8,9 +8,11 @@ allowed-tools: Bash(pdfk:*) Bash(*/bin/pdfk *) Read Grep Glob
 
 Docpacks live in `.pdfk/<doc-id>/` (see `pdfk status`). A project usually has several: a reference `manual`,
 a `datasheet`, `errata`, app notes. Each has `INDEX.md` (table of contents with pages), `sections/*.md`
-(markdown with `<!-- p.N -->` page anchors), `tables/*.csv`, `figures/`, `registers.jsonl`, `search.sqlite`.
+(markdown with `<!-- p.N -->` page anchors), `tables/`, `figures/`, `registers.jsonl`, `memmap.jsonl`, `search.sqlite`.
 
-If `pdfk` is not on PATH, run `"${CLAUDE_PLUGIN_ROOT}/bin/pdfk"` instead (same arguments).
+Run `pdfk …` as one plain command: no `cd`, no `&&`/`||` fallbacks, no pipes. The plugin puts it on PATH
+and compound commands trigger permission prompts. Only if it fails with "command not found", run
+`"${CLAUDE_PLUGIN_ROOT}/bin/pdfk"` with the same arguments.
 
 ## Rules
 
@@ -23,18 +25,24 @@ If `pdfk` is not on PATH, run `"${CLAUDE_PLUGIN_ROOT}/bin/pdfk"` instead (same a
 4. **Prefer machine sources for numbers when present** (CMSIS-SVD, vendor headers in the SDK); use the docpack
    for meaning, sequences, constraints. Say which source a number came from.
 5. If a register lookup shows `mismatch`, the value was not confirmed against the PDF text layer:
-   open the cited section and read the number yourself before using it.
+   open the cited section and read the number yourself before using it. Values marked `ok` were already
+   checked against the PDF: do not re-read the section just to confirm them.
+6. **Answer as soon as a hit contains the fact.** `pdfk search` prints the whole paragraph (or the heading
+   plus what follows it) for the top 3 hits; `pdfk reg` prints every field. Run independent lookups
+   (e.g. `pdfk reg` and `pdfk search`) in parallel in the same turn. Every extra turn re-sends the whole
+   conversation.
 
 ## Protocol (cheapest first)
 
 ```
-pdfk status                                  # which docs exist (once per session)
-pdfk reg RCC_CR [--doc rm0440]               # register, bit fields, offset/reset, citation
-pdfk search "PLL ready flag" --doc rm0440    # ranked hits: doc §sec p.N sections/file.md:line  snippet
+pdfk status                                  # which docs exist (already in the session context: skip it)
+pdfk reg RCC_CR [--doc rm0440]               # register, bit fields, offset/reset, absolute address, citation
+pdfk map [UART1]                             # peripheral base addresses (memory map), verified
+pdfk search "PLL ready flag" --doc rm0440    # ranked hits: doc §sec p.N sections/file.md:line  text (top 3 in full)
 pdfk search "RCC_AHB2*" --kind table         # prefix, restrict to tables / headings / text
 pdfk section rm0440 7.4.1 --lines 80         # print a section by number (paged with --offset)
 pdfk toc rm0440 7 --depth 3                  # headings below a chapter
-pdfk table rm0440 t0421                      # CSV of a table (merged cells preserved)
+pdfk table rm0440 t0421 [--cells]            # CSV of a table; --cells shows merged-cell spans exactly
 pdfk search "clock tree" --kind figure       # figures are indexed by caption and by the labels inside them
 pdfk figure rm0440 f0102                     # caption, labels, PNG path (Read the PNG only if really needed)
 ```

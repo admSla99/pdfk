@@ -19,6 +19,8 @@
 | Need | Command |
 |---|---|
 | exact identifier (`RCC_CR`, `GPIO0_CTRL`) | `pdfk reg NAME` first, then `pdfk search "NAME"` |
+| base or absolute address of a peripheral / register | `pdfk map NAME`, or the `addr` in `pdfk reg NAME` |
+| a table with merged cells (bit maps, pin tables) | `pdfk table <doc> <tid> --cells` |
 | a concept ("clock security system") | `pdfk search "clock security system"` |
 | something in a table (pin mapping, memory map) | `pdfk search "…" --kind table`, then `pdfk table <doc> <tid>` |
 | within one chapter | `--section 7` (prefix match on heading numbers) |

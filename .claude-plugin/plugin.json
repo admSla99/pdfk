@@ -1,6 +1,6 @@
 {
   "name": "pdfk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Docpacks: turn 1000-page vendor PDFs (MCU reference manuals, datasheets) into precise, citeable, token-cheap knowledge packs and query them with pdfk search / reg / section.",
   "author": { "name": "Adam" },
   "keywords": ["pdf", "docling", "embedded", "reference-manual", "registers", "rag"]

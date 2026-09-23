@@ -23,7 +23,8 @@ Steps:
    Ask which `--kind` the document is if it is not obvious from its title (errata sheets matter: `pdfk reg`
    cross-references them). Suggest `--figures` for manuals with clock trees and block diagrams.
 2. When it finishes, print the one-line summary and read `.pdfk/<id>/QA.md`. Report: pages, time, confidence
-   grades, number of low-confidence pages, section/table/register counts, verify ok/mismatch.
+   grades, number of low-confidence pages, section/table/register counts, number of base addresses in the
+   memory map, verify ok/mismatch for registers and memory map.
 3. Sanity check: run `pdfk toc <id> --depth 1` and confirm the chapter structure looks like the manual's table
    of contents. If everything is a single flat level, the PDF has no bookmarks: report it.
 4. Suggest `.gitignore` entry `.pdfk/*/search.sqlite` (regenerable with `pdfk rebuild`). Everything else is
