@@ -386,7 +386,8 @@ def render_part(part: Part, doc_id: str, source: str, figure_files: set[str] | N
             headings.append(
                 {"sec": b.sec, "title": b.title, "level": b.level, "page": b.page, "file": part.name + ".md", "line": line_no}
             )
-            records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": "heading", "text": b.text})
+            records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": "heading",
+                            "tid": "", "text": b.text})
             continue
         if b.page and b.page != cur_page:
             cur_page = b.page
@@ -412,7 +413,8 @@ def render_part(part: Part, doc_id: str, source: str, figure_files: set[str] | N
         kind = "figure" if b.kind == "picture" else b.kind
         if b.text == TOC_PLACEHOLDER:
             continue
-        records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": kind, "text": text_for_index})
+        records.append({"file": part.name + ".md", "line": line_no, "page": b.page, "section": sec_path, "kind": kind,
+                        "tid": b.table_id, "text": text_for_index})
     return "\n".join(lines).rstrip() + "\n", headings, records
 
 

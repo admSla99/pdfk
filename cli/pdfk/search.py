@@ -8,7 +8,8 @@ from pathlib import Path
 
 SCHEMA = (
     "CREATE VIRTUAL TABLE chunks USING fts5("
-    "doc UNINDEXED, file UNINDEXED, line UNINDEXED, page UNINDEXED, section UNINDEXED, kind UNINDEXED, text, "
+    "doc UNINDEXED, file UNINDEXED, line UNINDEXED, page UNINDEXED, section UNINDEXED, kind UNINDEXED, "
+    "tid UNINDEXED, text, "
     "tokenize='unicode61 remove_diacritics 2')"
 )
 
@@ -25,8 +26,9 @@ def build_index(db_path: Path, doc_id: str, records: list[dict]) -> None:
     con = sqlite3.connect(db_path)
     con.execute(SCHEMA)
     con.executemany(
-        "INSERT INTO chunks(doc,file,line,page,section,kind,text) VALUES (?,?,?,?,?,?,?)",
-        [(doc_id, r["file"], r["line"], r["page"], r["section"], r["kind"], r["text"]) for r in records],
+        "INSERT INTO chunks(doc,file,line,page,section,kind,tid,text) VALUES (?,?,?,?,?,?,?,?)",
+        [(doc_id, r["file"], r["line"], r["page"], r["section"], r["kind"], r.get("tid", ""), r["text"])
+         for r in records],
     )
     con.commit()
     con.close()
@@ -55,7 +57,7 @@ def query(db_path: Path, q: str, *, kind: str | None = None, section: str | None
     con = sqlite3.connect(db_path)
     # bm25 is negative (more negative = better). Weights push SDK code listings, which repeat every
     # identifier many times, below the prose and tables that define them.
-    sql = ("SELECT rowid,doc,file,line,page,section,kind,snippet(chunks,6,'','','…',14) AS snip, text, "
+    sql = ("SELECT rowid,doc,file,line,page,section,kind,tid,snippet(chunks,7,'','','…',14) AS snip, text, "
            "bm25(chunks) * " + KIND_WEIGHT_SQL + " AS rank FROM chunks WHERE chunks MATCH ?")
     args: list = [fts_query(q)]
     if kind:
@@ -72,8 +74,8 @@ def query(db_path: Path, q: str, *, kind: str | None = None, section: str | None
         con.close()
         raise SystemExit(f"search error: {e}")
     out = []
-    for i, (rowid, doc, file, line, page, sec, knd, snip, text, rank) in enumerate(rows):
-        h = {"doc": doc, "file": file, "line": line, "page": page, "section": sec, "kind": knd,
+    for i, (rowid, doc, file, line, page, sec, knd, tid, snip, text, rank) in enumerate(rows):
+        h = {"doc": doc, "file": file, "line": line, "page": page, "section": sec, "kind": knd, "tid": tid or "",
              "snippet": _one_line(snip), "rank": rank}
         if i < full:
             body = _one_line(text)
@@ -96,4 +98,7 @@ def _one_line(s: str) -> str:
 def format_hit(h: dict, width: int = 120) -> str:
     sec = f"§{h['section']}" if h["section"] else "§?"
     body = h.get("text") or h["snippet"][:width]
-    return f"{h['doc']} {sec} p.{h['page']} sections/{h['file']}:{h['line']}  {body}"
+    # A table/figure hit is one row out of a grid: print its id so the next call is
+    # `pdfk table <doc> <tid>` (CSV, header included) instead of a guessed Read window.
+    ref = f" [{h['tid']}]" if h.get("tid") else ""
+    return f"{h['doc']} {sec} p.{h['page']} sections/{h['file']}:{h['line']}{ref}  {body}"

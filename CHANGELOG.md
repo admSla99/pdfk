@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Table ids in search hits.** `pdfk search` prints the table or figure id after the line number
+  (`sections/02-….md:81 [t0008]`), so a hit in a grid goes straight to `pdfk table <doc> <tid>` — CSV with the
+  header row — instead of a guessed `Read` window. A table row without its header is not an answer.
+  Existing docpacks need `pdfk rebuild <doc>` for the id to appear.
+- **Read windows.** The skill and the `doc-researcher` agent now say to centre a `Read` on the hit line
+  (`offset = <line> - 5`, `limit = 20-40`). Reading from `offset=1` for a hit at line 81 cost 10x the bytes
+  for the same answer.
+- **Eval.** `eval/results/mspm0g1518/graphify-comparison.md` compares a docpack against a knowledge graph of
+  the same datasheet on one pinout question, and decomposes the per-call token use of the lookup.
+
 ## 0.2.0
 
 Accuracy, memory map, tests and a reproducible eval.

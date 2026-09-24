@@ -5,12 +5,15 @@
 `pdfk search` line format:
 
 ```
-<doc> §<section> p.<page> sections/<file>.md:<line>  <snippet>
+<doc> §<section> p.<page> sections/<file>.md:<line> [<tid>]  <snippet>
 ```
 
 - `§<section>` is the heading number the hit sits under (or a title fragment when unnumbered).
 - `p.<page>` is the printed PDF page (1-based, matches the PDF viewer page).
-- `<file>:<line>` is where the block starts; open with `Read` at that offset.
+- `<file>:<line>` is where the block starts; `Read` it with `offset = <line> - 5`, `limit = 20-40`.
+  Reading from `offset=1` for a hit further down the file costs ~10x the bytes for the same answer.
+- `[<tid>]` appears on table and figure hits only: pass it to `pdfk table <doc> <tid>` (CSV with the
+  header row) or `pdfk figure <doc> <fid>`, which beats any Read window for tabular data.
 
 `pdfk section <doc> <sec>` prints the section body (default 80 lines) with the same citation header.
 

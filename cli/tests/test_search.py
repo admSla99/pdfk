@@ -1,6 +1,6 @@
 """SQLite FTS5 index: query escaping and kind-weighted ranking."""
 
-from pdfk.search import build_index, fts_query, query
+from pdfk.search import build_index, format_hit, fts_query, query
 
 
 def rec(line, kind, text, section="2.18.4"):
@@ -55,3 +55,17 @@ def test_full_hits_carry_the_block_and_headings_carry_what_follows(tmp_path):
     assert "text" not in hits[2]
     capped = query(db, "keeper", full=3, max_chars=40)
     assert all(len(h["text"]) <= 42 for h in capped)
+
+
+def test_table_hits_carry_the_table_id_so_the_next_call_is_pdfk_table(tmp_path):
+    db = tmp_path / "search.sqlite"
+    build_index(db, "mspm0g1518", [
+        dict(rec(81, "table", "PT PIN | PM PIN | NRST | NRST | RESET"), tid="t0008"),
+        rec(20, "text", "The NRST reset pin must be pulled up to VDD."),
+    ])
+    table_hit = next(h for h in query(db, "NRST") if h["kind"] == "table")
+    assert table_hit["tid"] == "t0008"
+    assert "[t0008]" in format_hit(table_hit)
+    text_hit = next(h for h in query(db, "NRST") if h["kind"] == "text")
+    assert text_hit["tid"] == ""
+    assert "[" not in format_hit(text_hit).split("  ", 1)[0]

@@ -20,8 +20,11 @@ and compound commands trigger permission prompts. Only if it fails with "command
    (address, offset, reset value, bit position, timing) must come from it. No hit → say the document does not contain it.
 2. **Cite every fact** as `[DOC §section p.N]`, e.g. `[rm0440 §7.4.1 p.281]`. The citation comes from the
    tool output (`pdfk search`, `pdfk reg`, `pdfk section` print it).
-3. **Never Read a PDF or a whole section file.** Read `sections/*.md` only with `offset`/`limit` at the line
-   number a search hit gave you (a window of 40-120 lines).
+3. **Never Read a PDF or a whole section file.** Read `sections/*.md` only with `offset`/`limit` *centred on
+   the hit line*: `offset = <hit line> - 5`, `limit = 20-40`. Never `offset=1` unless the hit is at the top of
+   the file — a hit at line 81 read from line 1 costs 10x the bytes for the same answer.
+   For a hit inside a table, don't Read at all: the hit line carries the table id in brackets
+   (`…md:81 [t0008]`), so run `pdfk table <doc> <tid>` for the whole table as CSV with its header row.
 4. **Prefer machine sources for numbers when present** (CMSIS-SVD, vendor headers in the SDK); use the docpack
    for meaning, sequences, constraints. Say which source a number came from.
 5. If a register lookup shows `mismatch`, the value was not confirmed against the PDF text layer:
@@ -51,7 +54,13 @@ Without `--doc`, `search` and `reg` cover every docpack; hits carry the doc id. 
 come from the `datasheet`, register behaviour from the `manual`. `pdfk reg` prints a `! errata mention …`
 block when an `errata` docpack names that register: read those hits before relying on the register.
 
-Then, if needed, `Read .pdfk/<doc>/sections/<file>.md` with `offset=<line>` `limit=80`.
+A `--kind table` hit is a table row: `--full` will not expand it, and the row alone is useless without its
+header. Table and figure hits print their id in brackets after the line number
+(`sections/02-….md:81 [t0008]`): go to `pdfk table <doc> <tid>` (CSV, header included) or
+`pdfk figure <doc> <fid>` rather than reading the section markdown.
+
+Then, if needed, `Read .pdfk/<doc>/sections/<file>.md` with `offset=<hit line - 5>` `limit=20`, widening only
+if the block is clearly cut off.
 
 For anything that needs more than two searches, delegate to the `doc-researcher` agent with the exact
 question and expected output, so raw manual text stays out of the main context.

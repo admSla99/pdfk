@@ -184,6 +184,11 @@ What this says:
   are billed at a tenth of the input price.
 - Limits: one document, one run per question (the same question can take 3 or 7 turns between runs), one model.
 
+A separate single-question comparison against an LLM-built knowledge graph of the same PDF is written up in
+[eval/results/mspm0g1518/graphify-comparison.md](eval/results/mspm0g1518/graphify-comparison.md): the graph
+summarises a document into concepts and drops the table rows, so a pinout lookup has nothing to hit. It also
+decomposes where the tokens of one lookup actually go, which is what motivated printing table ids in search hits.
+
 ## Notes
 
 - Conversion on CPU takes about 2 s per page (first run also downloads ~500 MB of models). The build prints a
